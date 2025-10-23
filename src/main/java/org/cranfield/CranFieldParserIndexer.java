@@ -475,35 +475,43 @@ public class CranFieldParserIndexer {
     }
 
     public static void runAllCombinations(String cranFile, String queriesFile, String qrelsFile) throws Exception {
-            List<Analyzer> analyzers = List.of(
-                    new StandardAnalyzer(),
-                    new EnglishAnalyzer(),
-                    new SimpleAnalyzer(),
-                    new WhitespaceAnalyzer()
-            );
+        List<Analyzer> analyzers = List.of(
+                new StandardAnalyzer(),
+                new EnglishAnalyzer(),
+                new SimpleAnalyzer(),
+                new WhitespaceAnalyzer()
+        );
 
-            String[] analyzerNames = {"StandardAnalyzer", "EnglishAnalyzer", "SimpleAnalyzer", "WhitespaceAnalyzer"};
-            int[] similarities = {1, 2, 3, 4};
-            String[] simNames = {"TFIDF", "BM25", "LMDirichlet", "LMJelinekMercer"};
+        String[] analyzerNames = {"StandardAnalyzer", "EnglishAnalyzer", "SimpleAnalyzer", "WhitespaceAnalyzer"};
+        int[] similarities = {1, 2, 3, 4};
+        String[] simNames = {"TFIDF", "BM25", "LMDirichlet", "LMJelinekMercer"};
 
-            List<CranFieldDocument> docs = parseCranField(new File(cranFile));
+        // Boost configurations to test
+        float[][] boostConfigs = {
+                {1.0f, 1.0f}, // title=1, content=1
+                {2.0f, 1.0f}, // title=2, content=1
+                {1.0f, 2.0f}  // title=1, content=2
+        };
 
-            // BM25 hyperparameters
-            float[] k1Values = {0.8f, 1.0f, 1.2f, 1.5f};
-            float[] bValues  = {0.5f, 0.75f, 1.0f};
+        List<CranFieldDocument> docs = parseCranField(new File(cranFile));
 
-            for (int i = 0; i < analyzers.size(); i++) {
-                Analyzer analyzer = analyzers.get(i);
-                String analyzerName = analyzerNames[i];
+        for (int i = 0; i < analyzers.size(); i++) {
+            Analyzer analyzer = analyzers.get(i);
+            String analyzerName = analyzerNames[i];
 
-                for (int s = 0; s < similarities.length; s++) {
-                    int simChoice = similarities[s];
-                    String simName = simNames[s];
+            for (int s = 0; s < similarities.length; s++) {
+                int simChoice = similarities[s];
+                String simName = simNames[s];
 
-                    String indexDirName = ROOT_INDEX_PATH + "index_" + analyzerName + "_" + simName;
+                for (float[] boost : boostConfigs) {
+                    float titleBoost = boost[0];
+                    float contentBoost = boost[1];
+
+                    String boostTag = String.format("t%.0f_c%.0f", titleBoost, contentBoost);
+                    String indexDirName = ROOT_INDEX_PATH + "index_" + analyzerName + "_" + simName + "_" + boostTag;
                     Path indexPath = Paths.get(indexDirName);
 
-                    System.out.println("\n=== Running combo: " + analyzerName + " + " + simName + " ===");
+                    System.out.println("\n=== Running combo: " + analyzerName + " + " + simName + " + Boost(" + titleBoost + "," + contentBoost + ") ===");
 
                     // build index
                     buildIndex(indexPath, docs, analyzer);
@@ -512,73 +520,55 @@ public class CranFieldParserIndexer {
                     try (IndexReader reader = DirectoryReader.open(FSDirectory.open(indexPath))) {
                         IndexSearcher searcher = makeSearcherWithSimilarity(reader, simChoice);
 
-                        String resultsPath =  "output/results";
+                        String resultsPath = "output/results";
                         new File(resultsPath).mkdirs();
 
-                        String internalEvalPath =  "output/internalEval";
-                        new File(internalEvalPath).mkdirs();
+                        String resultFile = String.format(resultsPath + "/%s_%s_%s_results.txt", analyzerName, simName, boostTag);
 
-                        String trecEvalPath =  "output/trec_eval";
+                        String internalEvalPath = "output/internalEval";
+                        new File(internalEvalPath).mkdirs();
+                        String evalFile = String.format(internalEvalPath + "/%s_%s_%s_eval.txt", analyzerName, simName, boostTag);
+
+                        System.out.println("Running internal eval for " + analyzerName + " + " + simName + " + " + boostTag);
+                        System.out.printf("Indexing docs: %d | Analyzer: %s | Similarity: %s | Boost(title=%.1f, content=%.1f)%n",
+                                docs.size(), analyzerName, simName, titleBoost, contentBoost);
+
+                        // Generate result files
+                        generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, titleBoost, contentBoost);
+                        runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, titleBoost, contentBoost);
+
+                        // Rename evaluation_details.txt to unique evalFile
+                        File evalDetails = new File("evaluation_details.txt");
+                        if (evalDetails.exists()) {
+                            evalDetails.renameTo(new File(evalFile));
+                        }
+
+                        // Run TREC_EVAL
+                        String trecEvalPath = "output/trec_eval";
                         new File(trecEvalPath).mkdirs();
 
-                        if (simChoice == 2) { // BM25 tuning
-                            for (float k1 : k1Values) {
-                                for (float b : bValues) {
-                                    searcher.setSimilarity(new BM25Similarity(k1, b));
+                        String trecEvalOutput = String.format(trecEvalPath + "/%s_%s_%s_trec.txt", analyzerName, simName, boostTag);
 
-                                    String resultFile = String.format(resultsPath+"/%s_%s_k1%.1f_b%.2f_results.txt", analyzerName, simName, k1, b);
-                                    String evalFile   = String.format(internalEvalPath+"/%s_%s_k1%.1f_b%.2f_eval.txt", analyzerName, simName, k1, b);
-                                    String trecEvalOutput = String.format(trecEvalPath+"/%s_%s_k1%.1f_b%.2f_trec.txt", analyzerName, simName, k1, b);
+                        ProcessBuilder pb = new ProcessBuilder("trec_eval", qrelsFile, resultFile);
+                        Process p = pb.start();
 
-                                    System.out.printf("Running BM25 k1=%.1f b=%.2f\n", k1, b);
-                                    generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, 2.0f, 1.0f);
-                                    runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, 2.0f, 1.0f);
-
-                                    // rename evaluation details to avoid overwriting
-                                    File evalDetails = new File("evaluation_details.txt");
-                                    if (evalDetails.exists()) evalDetails.renameTo(new File(evalFile));
-
-                                    // run trec_eval
-                                    ProcessBuilder pb = new ProcessBuilder("trec_eval", qrelsFile, resultFile);
-                                    Process p = pb.start();
-                                    try (BufferedReader readerCmd = new BufferedReader(new InputStreamReader(p.getInputStream()));
-                                         PrintWriter writer = new PrintWriter(new FileWriter(trecEvalOutput))) {
-                                        String line;
-                                        while ((line = readerCmd.readLine()) != null) writer.println(line);
-                                    }
-                                    p.waitFor();
-                                    System.out.println("TREC_EVAL done: " + trecEvalOutput);
-                                }
+                        try (BufferedReader readerCmd = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                             PrintWriter writer = new PrintWriter(new FileWriter(trecEvalOutput))) {
+                            String line;
+                            while ((line = readerCmd.readLine()) != null) {
+                                writer.println(line);
                             }
-                        } else { // Non-BM25 similarities
-                            String resultFile = String.format(resultsPath+"/%s_%s_results.txt", analyzerName, simName);
-                            String evalFile   = String.format(internalEvalPath+"/%s_%s_eval.txt", analyzerName, simName);
-                            String trecEvalOutput = String.format(trecEvalPath+"/%s_%s_trec.txt", analyzerName, simName);
-
-                            generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, 2.0f, 1.0f);
-                            runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, 2.0f, 1.0f);
-
-                            File evalDetails = new File("evaluation_details.txt");
-                            if (evalDetails.exists()) evalDetails.renameTo(new File(evalFile));
-
-                            // TREC eval
-                            ProcessBuilder pb = new ProcessBuilder("trec_eval", qrelsFile, resultFile);
-                            Process p = pb.start();
-                            try (BufferedReader readerCmd = new BufferedReader(new InputStreamReader(p.getInputStream()));
-                                 PrintWriter writer = new PrintWriter(new FileWriter(trecEvalOutput))) {
-                                String line;
-                                while ((line = readerCmd.readLine()) != null) writer.println(line);
-                            }
-                            p.waitFor();
-                            System.out.println("TREC_EVAL done: " + trecEvalOutput);
                         }
+                        p.waitFor();
+                        System.out.println("✅ TREC_EVAL done: " + trecEvalOutput);
                     }
                 }
             }
+        }
 
-            System.out.println("\n🎯 All analyzer × similarity combinations completed. Check output/ folders.");
-
+        System.out.println("\n🎯 All analyzer × similarity × boost combinations completed. Check results/ and trec_eval/ folders.");
     }
+
 
     // --------------------------
     // Main program flow & menu

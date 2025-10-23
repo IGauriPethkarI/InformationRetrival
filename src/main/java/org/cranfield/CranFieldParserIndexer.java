@@ -1,11 +1,13 @@
 package org.cranfield;
 
 import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.core.SimpleAnalyzer;
 import org.apache.lucene.analysis.core.WhitespaceAnalyzer;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StringField;
@@ -220,7 +222,21 @@ public class CranFieldParserIndexer {
         }
     }
 
-    public static LinkedHashMap<String, String> loadQueries(String queriesFile) throws IOException {
+    public static String analyzeQuery(String text, Analyzer analyzer) throws IOException {
+        try (TokenStream tokenStream = analyzer.tokenStream("", text)) { // "" = field name not important here
+            CharTermAttribute attr = tokenStream.addAttribute(CharTermAttribute.class);
+            tokenStream.reset();
+            StringBuilder sb = new StringBuilder();
+            while (tokenStream.incrementToken()) {
+                if (sb.length() > 0) sb.append(' '); // separate tokens by space
+                sb.append(attr.toString());          // get the token text
+            }
+            tokenStream.end();
+            return sb.toString();                   // return the processed query string
+        }
+    }
+
+    public static LinkedHashMap<String, String> loadQueries(String queriesFile, Analyzer analyzer) throws IOException {
         LinkedHashMap<String, String> queries = new LinkedHashMap<>();
         int id = 1; // start ID from 1
 
@@ -233,7 +249,8 @@ public class CranFieldParserIndexer {
                 line = line.trim();
                 if (line.startsWith(".I")) {
                     if (!sb.isEmpty()) {
-                        queries.put(String.valueOf(id), sb.toString().trim());
+                        String analyzedQuery = analyzeQuery(sb.toString().trim(), analyzer);
+                        queries.put(String.valueOf(id), analyzedQuery);
                         id++; // increment ID for the next query
                     }
                     sb.setLength(0);
@@ -245,9 +262,9 @@ public class CranFieldParserIndexer {
                 }
             }
 
-            // add last query
             if (!sb.isEmpty()) {
-                queries.put(String.valueOf(id), sb.toString().trim());
+                String analyzedQuery = analyzeQuery(sb.toString().trim(), analyzer);
+                queries.put(String.valueOf(id), analyzedQuery);
             }
         }
         return queries;
@@ -273,7 +290,7 @@ public class CranFieldParserIndexer {
 
     public static void generateTrecResults(IndexSearcher searcher, Analyzer analyzer, String queriesFile, String outputFile,
                                            int topK, float titleBoost, float bodyBoost) throws Exception {
-        LinkedHashMap<String, String> queries = loadQueries(queriesFile);
+        LinkedHashMap<String, String> queries = loadQueries(queriesFile,analyzer);
         MultiFieldQueryParser parser = makeParser(analyzer, titleBoost, bodyBoost);
 
         try (PrintWriter pw = new PrintWriter(new FileWriter(outputFile))) {
@@ -371,7 +388,7 @@ public class CranFieldParserIndexer {
                                              String queriesFile, String qrelFile,
                                              int topK, float titleBoost, float bodyBoost) throws Exception {
 
-        LinkedHashMap<String, String> queries = loadQueries(queriesFile);
+        LinkedHashMap<String, String> queries = loadQueries(queriesFile,analyzer);
         Map<String, Map<String, Integer>> qrels = loadQrels(qrelFile);
         MultiFieldQueryParser parser = makeParser(analyzer, titleBoost, bodyBoost);
 
@@ -477,9 +494,15 @@ public class CranFieldParserIndexer {
             String analyzerName = analyzerNames[i];
 
             for (int s = 0; s < similarities.length; s++) {
+
                 int simChoice = similarities[s];
                 String simName = simNames[s];
+                if(simChoice ==2){
 
+                }
+                else{
+
+                }
                 String indexDirName = ROOT_INDEX_PATH + "index_" + analyzerName + "_" + simName;
                 Path indexPath = Paths.get(indexDirName);
 
@@ -498,13 +521,17 @@ public class CranFieldParserIndexer {
 
                     // results file per combination
                     String resultFile = String.format(resultsPath+"/%s_%s_results.txt", analyzerName, simName);
-                    String evalFile = String.format(resultsPath+"/%s_%s_eval.txt", analyzerName, simName);
 
-                    // generate TREC results
-                    generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, 2.0f, 1.0f);
+                    String internalEvalPath =  "output/internalEval";
+                    File evalFolder = new File(resultsPath);
+                    if (!evalFolder.exists()) evalFolder.mkdirs();
+                    String evalFile = String.format(internalEvalPath+"/%s_%s_eval.txt", analyzerName, simName);
 
                     // run internal evaluation
                     System.out.println("Running internal eval for " + analyzerName + " + " + simName);
+                    System.out.printf("Indexing docs: %d | Analyzer: %s | Similarity: %s%n", docs.size(), analyzerName, simName);
+
+                    generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, 2.0f, 1.0f);
                     runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, 2.0f, 1.0f);
 
                     // rename evaluation_details.txt to avoid overwriting

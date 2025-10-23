@@ -475,99 +475,109 @@ public class CranFieldParserIndexer {
     }
 
     public static void runAllCombinations(String cranFile, String queriesFile, String qrelsFile) throws Exception {
-        List<Analyzer> analyzers = List.of(
-                new StandardAnalyzer(),
-                new EnglishAnalyzer(),
-                new SimpleAnalyzer(),
-                new WhitespaceAnalyzer()
-        );
+            List<Analyzer> analyzers = List.of(
+                    new StandardAnalyzer(),
+                    new EnglishAnalyzer(),
+                    new SimpleAnalyzer(),
+                    new WhitespaceAnalyzer()
+            );
 
-        String[] analyzerNames = {"StandardAnalyzer", "EnglishAnalyzer", "SimpleAnalyzer", "WhitespaceAnalyzer"};
-        int[] similarities = {1, 2, 3, 4};
-        String[] simNames = {"TFIDF", "BM25", "LMDirichlet", "LMJelinekMercer"};
+            String[] analyzerNames = {"StandardAnalyzer", "EnglishAnalyzer", "SimpleAnalyzer", "WhitespaceAnalyzer"};
+            int[] similarities = {1, 2, 3, 4};
+            String[] simNames = {"TFIDF", "BM25", "LMDirichlet", "LMJelinekMercer"};
 
-        List<CranFieldDocument> docs = parseCranField(new File(cranFile));
+            List<CranFieldDocument> docs = parseCranField(new File(cranFile));
 
+            // BM25 hyperparameters
+            float[] k1Values = {0.8f, 1.0f, 1.2f, 1.5f};
+            float[] bValues  = {0.5f, 0.75f, 1.0f};
 
-        for (int i = 0; i < analyzers.size(); i++) {
-            Analyzer analyzer = analyzers.get(i);
-            String analyzerName = analyzerNames[i];
+            for (int i = 0; i < analyzers.size(); i++) {
+                Analyzer analyzer = analyzers.get(i);
+                String analyzerName = analyzerNames[i];
 
-            for (int s = 0; s < similarities.length; s++) {
+                for (int s = 0; s < similarities.length; s++) {
+                    int simChoice = similarities[s];
+                    String simName = simNames[s];
 
-                int simChoice = similarities[s];
-                String simName = simNames[s];
-                if(simChoice ==2){
+                    String indexDirName = ROOT_INDEX_PATH + "index_" + analyzerName + "_" + simName;
+                    Path indexPath = Paths.get(indexDirName);
 
-                }
-                else{
+                    System.out.println("\n=== Running combo: " + analyzerName + " + " + simName + " ===");
 
-                }
-                String indexDirName = ROOT_INDEX_PATH + "index_" + analyzerName + "_" + simName;
-                Path indexPath = Paths.get(indexDirName);
+                    // build index
+                    buildIndex(indexPath, docs, analyzer);
 
-                System.out.println("\n=== Running combo: " + analyzerName + " + " + simName + " ===");
+                    // open searcher
+                    try (IndexReader reader = DirectoryReader.open(FSDirectory.open(indexPath))) {
+                        IndexSearcher searcher = makeSearcherWithSimilarity(reader, simChoice);
 
-                // build index
-                buildIndex(indexPath, docs, analyzer);
+                        String resultsPath =  "output/results";
+                        new File(resultsPath).mkdirs();
 
-                // open searcher
-                try (IndexReader reader = DirectoryReader.open(FSDirectory.open(indexPath))) {
-                    IndexSearcher searcher = makeSearcherWithSimilarity(reader, simChoice);
+                        String internalEvalPath =  "output/internalEval";
+                        new File(internalEvalPath).mkdirs();
 
-                    String resultsPath =  "output/results";
-                    File resultsFolder = new File(resultsPath);
-                    if (!resultsFolder.exists()) resultsFolder.mkdirs();
+                        String trecEvalPath =  "output/trec_eval";
+                        new File(trecEvalPath).mkdirs();
 
-                    // results file per combination
-                    String resultFile = String.format(resultsPath+"/%s_%s_results.txt", analyzerName, simName);
+                        if (simChoice == 2) { // BM25 tuning
+                            for (float k1 : k1Values) {
+                                for (float b : bValues) {
+                                    searcher.setSimilarity(new BM25Similarity(k1, b));
 
-                    String internalEvalPath =  "output/internalEval";
-                    File evalFolder = new File(resultsPath);
-                    if (!evalFolder.exists()) evalFolder.mkdirs();
-                    String evalFile = String.format(internalEvalPath+"/%s_%s_eval.txt", analyzerName, simName);
+                                    String resultFile = String.format(resultsPath+"/%s_%s_k1%.1f_b%.2f_results.txt", analyzerName, simName, k1, b);
+                                    String evalFile   = String.format(internalEvalPath+"/%s_%s_k1%.1f_b%.2f_eval.txt", analyzerName, simName, k1, b);
+                                    String trecEvalOutput = String.format(trecEvalPath+"/%s_%s_k1%.1f_b%.2f_trec.txt", analyzerName, simName, k1, b);
 
-                    // run internal evaluation
-                    System.out.println("Running internal eval for " + analyzerName + " + " + simName);
-                    System.out.printf("Indexing docs: %d | Analyzer: %s | Similarity: %s%n", docs.size(), analyzerName, simName);
+                                    System.out.printf("Running BM25 k1=%.1f b=%.2f\n", k1, b);
+                                    generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, 2.0f, 1.0f);
+                                    runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, 2.0f, 1.0f);
 
-                    generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, 2.0f, 1.0f);
-                    runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, 2.0f, 1.0f);
+                                    // rename evaluation details to avoid overwriting
+                                    File evalDetails = new File("evaluation_details.txt");
+                                    if (evalDetails.exists()) evalDetails.renameTo(new File(evalFile));
 
-                    // rename evaluation_details.txt to avoid overwriting
-                    File evalDetails = new File("evaluation_details.txt");
-                    if (evalDetails.exists()) {
-                        evalDetails.renameTo(new File(evalFile));
-                    }
+                                    // run trec_eval
+                                    ProcessBuilder pb = new ProcessBuilder("trec_eval", qrelsFile, resultFile);
+                                    Process p = pb.start();
+                                    try (BufferedReader readerCmd = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                                         PrintWriter writer = new PrintWriter(new FileWriter(trecEvalOutput))) {
+                                        String line;
+                                        while ((line = readerCmd.readLine()) != null) writer.println(line);
+                                    }
+                                    p.waitFor();
+                                    System.out.println("TREC_EVAL done: " + trecEvalOutput);
+                                }
+                            }
+                        } else { // Non-BM25 similarities
+                            String resultFile = String.format(resultsPath+"/%s_%s_results.txt", analyzerName, simName);
+                            String evalFile   = String.format(internalEvalPath+"/%s_%s_eval.txt", analyzerName, simName);
+                            String trecEvalOutput = String.format(trecEvalPath+"/%s_%s_trec.txt", analyzerName, simName);
 
-                    String trecEvalPath =  "output/trec_eval";
-                    File trecFolder = new File(trecEvalPath);
-                    if (!trecFolder.exists()) trecFolder.mkdirs();
+                            generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, 2.0f, 1.0f);
+                            runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, 2.0f, 1.0f);
 
-                    String trecEvalOutput = String.format(trecEvalPath+"/%s_%s_trec.txt", analyzerName, simName);
-                    String internalEvalOutput = String.format(trecEvalPath+"/%s_%s_internal.txt", analyzerName, simName);
+                            File evalDetails = new File("evaluation_details.txt");
+                            if (evalDetails.exists()) evalDetails.renameTo(new File(evalFile));
 
-                    File trecEvalDetail = new File("evaluation_details.txt");
-                    if (trecEvalDetail.exists()) {
-                        trecEvalDetail.renameTo(new File(internalEvalOutput));
-                    }
-                    ProcessBuilder pb = new ProcessBuilder("trec_eval", qrelsFile, resultFile);
-                    Process p = pb.start();
-
-                    try (BufferedReader readerCmd = new BufferedReader(new InputStreamReader(p.getInputStream()));
-                         PrintWriter writer = new PrintWriter(new FileWriter(trecEvalOutput))) {
-                        String line;
-                        while ((line = readerCmd.readLine()) != null) {
-                            writer.println(line);
+                            // TREC eval
+                            ProcessBuilder pb = new ProcessBuilder("trec_eval", qrelsFile, resultFile);
+                            Process p = pb.start();
+                            try (BufferedReader readerCmd = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                                 PrintWriter writer = new PrintWriter(new FileWriter(trecEvalOutput))) {
+                                String line;
+                                while ((line = readerCmd.readLine()) != null) writer.println(line);
+                            }
+                            p.waitFor();
+                            System.out.println("TREC_EVAL done: " + trecEvalOutput);
                         }
                     }
-                    p.waitFor();
-                    System.out.println("TREC_EVAL done: " + trecEvalOutput);
                 }
             }
-        }
 
-        System.out.println("\n🎯 All analyzer × similarity combinations completed. Check results/ and eval_trec/ folders.");
+            System.out.println("\n🎯 All analyzer × similarity combinations completed. Check output/ folders.");
+
     }
 
     // --------------------------

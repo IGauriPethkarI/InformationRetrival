@@ -1,12 +1,14 @@
 package org.cranfield;
 
-import org.apache.lucene.analysis.Analyzer;
-import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.*;
 import org.apache.lucene.analysis.core.SimpleAnalyzer;
 import org.apache.lucene.analysis.core.WhitespaceAnalyzer;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
+import org.apache.lucene.analysis.en.PorterStemFilter;
+import org.apache.lucene.analysis.miscellaneous.ASCIIFoldingFilter;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 
+import org.apache.lucene.analysis.standard.StandardTokenizer;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
@@ -44,13 +46,7 @@ import java.io.*;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Scanner;
+import java.util.*;
 
 
 /**
@@ -159,12 +155,14 @@ public class CranFieldParserIndexer {
         System.out.println("2: EnglishAnalyzer");
         System.out.println("3: SimpleAnalyzer");
         System.out.println("4: WhitespaceAnalyzer");
+        System.out.println("5: CustomAnalyzer");
         System.out.print("> ");
         String input = sc.nextLine().trim();
         return switch (input) {
             case "1" -> new StandardAnalyzer();
             case "3" -> new SimpleAnalyzer();
             case "4" -> new WhitespaceAnalyzer();
+            case "5" -> getCranfieldAnalyzer();
             default -> new EnglishAnalyzer(); // default
         };
     }
@@ -473,16 +471,60 @@ public class CranFieldParserIndexer {
         }
         return searcher;
     }
+    public static Analyzer getCranfieldAnalyzer() {
+        // ✅ SMART-style Cranfield stopword list
+        List<String> cranStopwords = Arrays.asList(
+                "a", "about", "above", "after", "again", "against", "all", "almost", "alone",
+                "along", "already", "also", "although", "always", "among", "an", "and", "another",
+                "any", "anybody", "anyone", "anything", "anywhere", "are", "as", "at", "be",
+                "because", "been", "before", "being", "between", "both", "but", "by", "can",
+                "could", "did", "do", "does", "doing", "down", "during", "each", "few", "for",
+                "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers",
+                "him", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "just",
+                "me", "more", "most", "my", "myself", "no", "nor", "not", "of", "off", "on",
+                "once", "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own",
+                "same", "she", "should", "so", "some", "such", "than", "that", "the", "their",
+                "theirs", "them", "themselves", "then", "there", "these", "they", "this", "those",
+                "through", "to", "too", "under", "until", "up", "very", "was", "we", "were",
+                "what", "when", "where", "which", "while", "who", "whom", "why", "with", "you",
+                "your", "yours", "yourself", "yourselves"
+        );
+
+        CharArraySet stopSet = new CharArraySet(cranStopwords, true);
+
+        return new Analyzer() {
+            @Override
+            protected TokenStreamComponents createComponents(String fieldName) {
+                // Step 1: Tokenizer
+                Tokenizer tokenizer = new StandardTokenizer();
+
+                // Step 2: Lowercase
+                TokenStream tokenStream = new LowerCaseFilter(tokenizer);
+
+                // Step 3: Normalize (strip punctuation, accents)
+                tokenStream = new ASCIIFoldingFilter(tokenStream);
+
+                // Step 4: Stopword removal
+                tokenStream = new StopFilter(tokenStream, stopSet);
+
+                // Step 5: Stemming
+                tokenStream = new PorterStemFilter(tokenStream);
+
+                return new TokenStreamComponents(tokenizer, tokenStream);
+            }
+        };
+    }
 
     public static void runAllCombinations(String cranFile, String queriesFile, String qrelsFile) throws Exception {
         List<Analyzer> analyzers = List.of(
                 new StandardAnalyzer(),
                 new EnglishAnalyzer(),
                 new SimpleAnalyzer(),
-                new WhitespaceAnalyzer()
+                new WhitespaceAnalyzer(),
+                getCranfieldAnalyzer()
         );
 
-        String[] analyzerNames = {"StandardAnalyzer", "EnglishAnalyzer", "SimpleAnalyzer", "WhitespaceAnalyzer"};
+        String[] analyzerNames = {"StandardAnalyzer", "EnglishAnalyzer", "SimpleAnalyzer", "WhitespaceAnalyzer", "CustomAnalyzer"};
         int[] similarities = {1, 2, 3, 4};
         String[] simNames = {"TFIDF", "BM25", "LMDirichlet", "LMJelinekMercer"};
 

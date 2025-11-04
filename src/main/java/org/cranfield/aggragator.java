@@ -4,6 +4,7 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.regex.*;
+import java.util.stream.Collectors;
 
 public class aggragator {
 
@@ -21,39 +22,67 @@ public class aggragator {
                 "iprec_at_recall_0.00"  // interpolated precision at recall 0.00
         );
 
-        // Prepare CSV header
-        try (PrintWriter writer = new PrintWriter(new FileWriter(outputCSV))) {
-            writer.println("Analyzer,Similarity,MAP,P@10,R-Prec,bpref,recip_rank,InterpolatedPrecision");
+        List<Map<String, String>> allRows = new ArrayList<>();
 
-            // Loop through each trec_eval result file
-            Files.list(Paths.get(trecEvalDir))
-                    .filter(path -> path.toString().endsWith(".txt"))
-                    .forEach(path -> {
-                        try {
-                            Map<String, String> values = parseTrecEvalFile(path, metrics);
-                            String fileName = path.getFileName().toString();
+        // Loop through each trec_eval result file
+        Files.list(Paths.get(trecEvalDir))
+                .filter(path -> path.toString().endsWith(".txt"))
+                .forEach(path -> {
+                    try {
+                        Map<String, String> values = parseTrecEvalFile(path, metrics);
+                        String fileName = path.getFileName().toString().replace("_trec.txt", "");
+                        String[] parts = fileName.split("_");
 
-                            // Extract analyzer and similarity names from file
-                            String[] parts = fileName.replace("_trec.txt", "").split("_");
-                            String analyzer = parts[0];
-                            String similarity = parts.length > 1 ? parts[1] : "Unknown";
+                        // Basic analyzer & similarity
+                        String analyzer = parts[0];
+                        String similarity = parts.length > 1 ? parts[1] : "Unknown";
 
-                            // Write a row in CSV
-                            writer.printf("%s,%s,%s,%s,%s,%s,%s,%s%n",
-                                    analyzer,
-                                    similarity,
-                                    values.getOrDefault("map", ""),
-                                    values.getOrDefault("P_10", ""),
-                                    values.getOrDefault("Rprec", ""),
-                                    values.getOrDefault("bpref", ""),
-                                    values.getOrDefault("recip_rank", ""),
-                                    values.getOrDefault("iprec_at_recall_0.00", "")
-                            );
-
-                        } catch (IOException e) {
-                            System.err.println("Error reading file: " + path + " - " + e.getMessage());
+                        // Initialize boost flags
+                        String t1 = "", c1 = "", t2 = "", c2 = "";
+                        for (String part : parts) {
+                            switch (part.toLowerCase()) {
+                                case "t1" -> t1 = "1";
+                                case "c1" -> c1 = "1";
+                                case "t2" -> t2 = "1";
+                                case "c2" -> c2 = "1";
+                            }
                         }
-                    });
+
+                        // Prepare row map
+                        Map<String, String> row = new LinkedHashMap<>();
+                        row.put("Analyzer", analyzer);
+                        row.put("Similarity", similarity);
+                        row.put("T1", t1);
+                        row.put("C1", c1);
+                        row.put("T2", t2);
+                        row.put("C2", c2);
+                        row.put("MAP", values.getOrDefault("map", ""));
+                        row.put("P@10", values.getOrDefault("P_10", ""));
+                        row.put("R-Prec", values.getOrDefault("Rprec", ""));
+                        row.put("bpref", values.getOrDefault("bpref", ""));
+                        row.put("recip_rank", values.getOrDefault("recip_rank", ""));
+                        row.put("InterpolatedPrecision", values.getOrDefault("iprec_at_recall_0.00", ""));
+
+                        allRows.add(row);
+
+                    } catch (IOException e) {
+                        System.err.println("Error reading file: " + path + " - " + e.getMessage());
+                    }
+                });
+
+        // Sort rows by MAP descending
+        allRows.sort((a, b) -> {
+            double mapA = a.get("MAP").isEmpty() ? 0.0 : Double.parseDouble(a.get("MAP"));
+            double mapB = b.get("MAP").isEmpty() ? 0.0 : Double.parseDouble(b.get("MAP"));
+            return Double.compare(mapB, mapA); // descending
+        });
+
+        // Write CSV
+        try (PrintWriter writer = new PrintWriter(new FileWriter(outputCSV))) {
+            writer.println("Analyzer,Similarity,T1,C1,T2,C2,MAP,P@10,R-Prec,bpref,recip_rank,InterpolatedPrecision");
+            for (Map<String, String> row : allRows) {
+                writer.println(row.values().stream().collect(Collectors.joining(",")));
+            }
         }
 
         System.out.println("✅ TREC Eval summary CSV generated at: " + outputCSV);

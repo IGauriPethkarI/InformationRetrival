@@ -48,28 +48,6 @@ import java.nio.file.Paths;
 
 import java.util.*;
 
-
-/**
- * CranfieldFullEval.java
- *
- * Single-file program that:
- * - Parses cran.all and indexes it with a chosen Analyzer
- * - Interactive search with field boosts and choice of Similarity (scoring)
- * - Batch mode: generate TREC-formatted results for queries
- * - Internal evaluation: compute Precision, Recall, F1, AP, MAP, and 11-point interpolated P-R
- *
- * Requirements:
- * - Java 21+
- * - Lucene 10.x dependencies (core, analyzers-common, queryparser) in pom.xml
- *
- * Usage:
- * 1. Place cran.all in project root
- * 2. Compile & run via Maven exec plugin, specify mainClass cranfield.CranfieldFullEval
- *
- * Notes:
- * - Qrels file expected in TREC qrel-like format: "<qid> 0 <docid> <relevance>"
- * - Query file expected in cran.qry form (uses .I and .W tags)
- */
 public class CranFieldParserIndexer {
 
     private static final String ROOT_INDEX_PATH = "index/";
@@ -236,7 +214,7 @@ public class CranFieldParserIndexer {
 
     public static LinkedHashMap<String, String> loadQueries(String queriesFile, Analyzer analyzer) throws IOException {
         LinkedHashMap<String, String> queries = new LinkedHashMap<>();
-        int id = 1; // start ID from 1
+        int id = 1;
 
         try (BufferedReader br = new BufferedReader(new FileReader(queriesFile))) {
             String line;
@@ -249,7 +227,7 @@ public class CranFieldParserIndexer {
                     if (!sb.isEmpty()) {
                         String analyzedQuery = analyzeQuery(sb.toString().trim(), analyzer);
                         queries.put(String.valueOf(id), analyzedQuery);
-                        id++; // increment ID for the next query
+                        id++;
                     }
                     sb.setLength(0);
                     inW = false;
@@ -310,11 +288,6 @@ public class CranFieldParserIndexer {
         System.out.println("Wrote TREC results to: " + outputFile);
     }
 
-    // --------------------------
-    // Internal evaluation functions
-    // --------------------------
-
-    // Compute Average Precision for one query (binary relevance: rel > 0)
     public static double averagePrecision(List<String> retrieved, Map<String, Integer> relevantMap) {
         int relevantCount = 0;
         int retrievedRelevant = 0;
@@ -335,7 +308,6 @@ public class CranFieldParserIndexer {
         return sumPrecisions / relevantCount;
     }
 
-    // Compute precision, recall, f1 for a given retrieved list and qrel set
     public static double[] precisionRecallF1(List<String> retrieved, Map<String, Integer> relevantMap) {
         int tp = 0;
         int relevantTotal = 0;
@@ -351,7 +323,6 @@ public class CranFieldParserIndexer {
     }
 
     public static double[] interpolatedPrecisionRecall(List<String> retrieved, Map<String, Integer> relevantMap) {
-        // Build precision-recall curve at each rank
         List<Double> precisions = new ArrayList<>();
         List<Double> recalls = new ArrayList<>();
         int tp = 0;
@@ -381,7 +352,6 @@ public class CranFieldParserIndexer {
         return interp;
     }
 
-    // Run internal evaluation over all queries: returns per-query metrics and aggregates
     public static void runInternalEvaluation(IndexSearcher searcher, Analyzer analyzer,
                                              String queriesFile, String qrelFile,
                                              int topK, float titleBoost, float bodyBoost) throws Exception {
@@ -390,7 +360,6 @@ public class CranFieldParserIndexer {
         Map<String, Map<String, Integer>> qrels = loadQrels(qrelFile);
         MultiFieldQueryParser parser = makeParser(analyzer, titleBoost, bodyBoost);
 
-        // accumulators
         double sumAP = 0.0;
         int qcount = 0;
         double sumPrecAtK = 0.0;
@@ -406,14 +375,12 @@ public class CranFieldParserIndexer {
                 String safeQuery = qtext.replaceAll("[\\?\\*]", " ");
                 Query q = parser.parse(safeQuery);
                 TopDocs topDocs = searcher.search(q, topK);
-                // retrieved doc ids in order
                 List<String> retrieved = new ArrayList<>();
                 for (ScoreDoc sd : topDocs.scoreDocs) {
                     Document doc = searcher.storedFields().document(sd.doc);
                     retrieved.add(doc.get("id"));
                 }
 
-                // metrics
                 double ap = averagePrecision(retrieved, rels);
                 double[] prf = precisionRecallF1(retrieved, rels); // precision, recall, f1 (at retrieved size)
                 double[] interp = interpolatedPrecisionRecall(retrieved, rels);
@@ -433,14 +400,12 @@ public class CranFieldParserIndexer {
         double avgPrecision = qcount == 0 ? 0.0 : sumPrecAtK / qcount;
         double avgRecall = qcount == 0 ? 0.0 : sumRecallAtK / qcount;
 
-        // compute mean interpolated precision at each level
         double[] meanInterp = new double[11];
         for (double[] arr : allInterpolated) {
             for (int i = 0; i < 11; i++) meanInterp[i] += arr[i];
         }
         for (int i = 0; i < 11; i++) if (qcount > 0) meanInterp[i] /= qcount;
 
-        // print summary
         System.out.println("----- Internal Evaluation Summary -----");
         System.out.printf("Queries evaluated: %d\n", qcount);
         System.out.printf("MAP: %.6f\n", MAP);
@@ -528,11 +493,10 @@ public class CranFieldParserIndexer {
         int[] similarities = {1, 2, 3, 4};
         String[] simNames = {"TFIDF", "BM25", "LMDirichlet", "LMJelinekMercer"};
 
-        // Boost configurations to test
         float[][] boostConfigs = {
-                {1.0f, 1.0f}, // title=1, content=1
-                {2.0f, 1.0f}, // title=2, content=1
-                {1.0f, 2.0f}  // title=1, content=2
+                {1.0f, 1.0f},
+                {2.0f, 1.0f},
+                {1.0f, 2.0f}
         };
 
         List<CranFieldDocument> docs = parseCranField(new File(cranFile));
@@ -555,10 +519,8 @@ public class CranFieldParserIndexer {
 
                     System.out.println("\n=== Running combo: " + analyzerName + " + " + simName + " + Boost(" + titleBoost + "," + contentBoost + ") ===");
 
-                    // build index
                     buildIndex(indexPath, docs, analyzer);
 
-                    // open searcher
                     try (IndexReader reader = DirectoryReader.open(FSDirectory.open(indexPath))) {
                         IndexSearcher searcher = makeSearcherWithSimilarity(reader, simChoice);
 
@@ -575,17 +537,14 @@ public class CranFieldParserIndexer {
                         System.out.printf("Indexing docs: %d | Analyzer: %s | Similarity: %s | Boost(title=%.1f, content=%.1f)%n",
                                 docs.size(), analyzerName, simName, titleBoost, contentBoost);
 
-                        // Generate result files
                         generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, titleBoost, contentBoost);
                         runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, titleBoost, contentBoost);
 
-                        // Rename evaluation_details.txt to unique evalFile
                         File evalDetails = new File("evaluation_details.txt");
                         if (evalDetails.exists()) {
                             evalDetails.renameTo(new File(evalFile));
                         }
 
-                        // Run TREC_EVAL
                         String trecEvalPath = "output/trec_eval";
                         new File(trecEvalPath).mkdirs();
 
@@ -602,24 +561,19 @@ public class CranFieldParserIndexer {
                             }
                         }
                         p.waitFor();
-                        System.out.println("✅ TREC_EVAL done: " + trecEvalOutput);
+                        System.out.println("TREC_EVAL Output: " + trecEvalOutput);
                     }
                 }
             }
         }
 
-        System.out.println("\n🎯 All analyzer × similarity × boost combinations completed. Check results/ and trec_eval/ folders.");
     }
 
 
-    // --------------------------
-    // Main program flow & menu
-    // --------------------------
     public static void main(String[] args) throws Exception {
         File cran = new File(CRAN_FILE);
         if (!cran.exists()) {
-            System.err.println("ERROR: cran.all not found in project root!");
-            System.err.println("Download from: http://ir.dcs.gla.ac.uk/resources/test_collections/cran/");
+            System.err.println("ERROR: cran.all not found in project");
             return;
         }
 
@@ -635,7 +589,6 @@ public class CranFieldParserIndexer {
             String choice = sc.nextLine().trim();
             switch (choice) {
                 case "1":
-                    // Choose analyzer & index
                     Analyzer analyzer = chooseAnalyzer(sc);
                     System.out.println("Parsing cran.all ...");
                     List<CranFieldDocument> docs = parseCranField(cran);
@@ -644,7 +597,7 @@ public class CranFieldParserIndexer {
                     buildIndex(INTERACTIVE_INDEX_PATH, docs, analyzer);
                     System.out.println("Index built at: " + INTERACTIVE_INDEX_PATH.toAbsolutePath());
 
-                    // interactive configuration: boosts and similarity
+
                     System.out.print("Title boost (default 2.0) : ");
                     String tb = sc.nextLine().trim();
                     float titleBoost = tb.isEmpty() ? 2.0f : Float.parseFloat(tb);
@@ -667,7 +620,6 @@ public class CranFieldParserIndexer {
                         interactiveSearch(searcher, analyzer, sc, titleBoost, bodyBoost);
 
                         generateTrecResults(searcher, analyzer, "cran/cran.qry", "output/interactive/results.txt", 100, titleBoost, bodyBoost);
-
                     }
 
                     break;
@@ -680,6 +632,6 @@ public class CranFieldParserIndexer {
 
         }
 
-        System.out.println("Done. Exiting.");
+        System.out.println("Exit.");
     }
 }

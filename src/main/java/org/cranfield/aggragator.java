@@ -19,7 +19,9 @@ public class aggragator {
                 "Rprec",
                 "bpref",
                 "recip_rank",
-                "iprec_at_recall_0.00"  // interpolated precision at recall 0.00
+                "iprec_at_recall_0.00",
+                "num_rel",
+                "num_rel_ret"
         );
 
         List<Map<String, String>> allRows = new ArrayList<>();
@@ -48,6 +50,18 @@ public class aggragator {
                             }
                         }
 
+                        // Compute Recall
+                        double recall = 0.0;
+                        if (values.containsKey("num_rel") && values.containsKey("num_rel_ret")) {
+                            try {
+                                double numRel = Double.parseDouble(values.get("num_rel"));
+                                double numRelRet = Double.parseDouble(values.get("num_rel_ret"));
+                                if (numRel > 0) {
+                                    recall = numRelRet / numRel;
+                                }
+                            } catch (NumberFormatException ignored) {}
+                        }
+
                         // Prepare row map
                         Map<String, String> row = new LinkedHashMap<>();
                         row.put("Analyzer", analyzer);
@@ -62,6 +76,7 @@ public class aggragator {
                         row.put("bpref", values.getOrDefault("bpref", ""));
                         row.put("recip_rank", values.getOrDefault("recip_rank", ""));
                         row.put("InterpolatedPrecision", values.getOrDefault("iprec_at_recall_0.00", ""));
+                        row.put("Recall", String.valueOf(recall));
 
                         allRows.add(row);
 
@@ -79,7 +94,7 @@ public class aggragator {
 
         // Write CSV
         try (PrintWriter writer = new PrintWriter(new FileWriter(outputCSV))) {
-            writer.println("Analyzer,Similarity,T1,C1,T2,C2,MAP,P@10,R-Prec,bpref,recip_rank,InterpolatedPrecision");
+            writer.println("Analyzer,Similarity,T1,C1,T2,C2,MAP,P@10,R-Prec,bpref,recip_rank,InterpolatedPrecision,Recall");
             for (Map<String, String> row : allRows) {
                 writer.println(row.values().stream().collect(Collectors.joining(",")));
             }

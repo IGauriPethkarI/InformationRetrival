@@ -93,7 +93,7 @@ public class aggragator {
             }
         }
 
-        System.out.println("✅ TREC Eval summary CSV generated at: " + outputCSV);
+        System.out.println("TREC Eval summary CSV generated at: " + outputCSV);
     }
 
     private static Map<String, String> parseTrecEvalFile(Path file, List<String> metrics) throws IOException {

@@ -141,7 +141,7 @@ public class CranFieldParserIndexer {
             case "3" -> new SimpleAnalyzer();
             case "4" -> new WhitespaceAnalyzer();
             case "5" -> getCranfieldAnalyzer();
-            default -> new EnglishAnalyzer(); // default
+            default -> new EnglishAnalyzer();
         };
     }
 
@@ -204,11 +204,11 @@ public class CranFieldParserIndexer {
             tokenStream.reset();
             StringBuilder sb = new StringBuilder();
             while (tokenStream.incrementToken()) {
-                if (sb.length() > 0) sb.append(' '); // separate tokens by space
-                sb.append(attr.toString());          // get the token text
+                if (sb.length() > 0) sb.append(' ');
+                sb.append(attr.toString());
             }
             tokenStream.end();
-            return sb.toString();                   // return the processed query string
+            return sb.toString();
         }
     }
 
@@ -436,8 +436,8 @@ public class CranFieldParserIndexer {
         }
         return searcher;
     }
+
     public static Analyzer getCranfieldAnalyzer() {
-        // ✅ SMART-style Cranfield stopword list
         List<String> cranStopwords = Arrays.asList(
                 "a", "about", "above", "after", "again", "against", "all", "almost", "alone",
                 "along", "already", "also", "although", "always", "among", "an", "and", "another",
@@ -460,19 +460,11 @@ public class CranFieldParserIndexer {
         return new Analyzer() {
             @Override
             protected TokenStreamComponents createComponents(String fieldName) {
-                // Step 1: Tokenizer
                 Tokenizer tokenizer = new StandardTokenizer();
 
-                // Step 2: Lowercase
                 TokenStream tokenStream = new LowerCaseFilter(tokenizer);
-
-                // Step 3: Normalize (strip punctuation, accents)
                 tokenStream = new ASCIIFoldingFilter(tokenStream);
-
-                // Step 4: Stopword removal
                 tokenStream = new StopFilter(tokenStream, stopSet);
-
-                // Step 5: Stemming
                 tokenStream = new PorterStemFilter(tokenStream);
 
                 return new TokenStreamComponents(tokenizer, tokenStream);

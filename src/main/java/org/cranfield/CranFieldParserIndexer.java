@@ -199,12 +199,12 @@ public class CranFieldParserIndexer {
     }
 
     public static String analyzeQuery(String text, Analyzer analyzer) throws IOException {
-        try (TokenStream tokenStream = analyzer.tokenStream("", text)) { // "" = field name not important here
+        try (TokenStream tokenStream = analyzer.tokenStream("", text)) {
             CharTermAttribute attr = tokenStream.addAttribute(CharTermAttribute.class);
             tokenStream.reset();
             StringBuilder sb = new StringBuilder();
             while (tokenStream.incrementToken()) {
-                if (sb.length() > 0) sb.append(' ');
+                if (!sb.isEmpty()) sb.append(' ');
                 sb.append(attr.toString());
             }
             tokenStream.end();

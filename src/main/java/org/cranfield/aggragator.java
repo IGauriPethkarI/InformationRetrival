@@ -9,10 +9,9 @@ import java.util.stream.Collectors;
 public class aggragator {
 
     public static void main(String[] args) throws IOException {
-        String trecEvalDir = "output/trec_eval";  // folder where all trec_eval results are saved
-        String outputCSV = "output/trec_eval_summary.csv";  // final summary file
+        String trecEvalDir = "output/trec_eval";
+        String outputCSV = "output/trec_eval_summary.csv";
 
-        // Metrics to extract
         List<String> metrics = List.of(
                 "map",
                 "P_10",
@@ -26,7 +25,6 @@ public class aggragator {
 
         List<Map<String, String>> allRows = new ArrayList<>();
 
-        // Loop through each trec_eval result file
         Files.list(Paths.get(trecEvalDir))
                 .filter(path -> path.toString().endsWith(".txt"))
                 .forEach(path -> {
@@ -39,7 +37,6 @@ public class aggragator {
                         String analyzer = parts[0];
                         String similarity = parts.length > 1 ? parts[1] : "Unknown";
 
-                        // Initialize boost flags
                         String t1 = "", c1 = "", t2 = "", c2 = "";
                         for (String part : parts) {
                             switch (part.toLowerCase()) {
@@ -50,7 +47,6 @@ public class aggragator {
                             }
                         }
 
-                        // Compute Recall
                         double recall = 0.0;
                         if (values.containsKey("num_rel") && values.containsKey("num_rel_ret")) {
                             try {
@@ -62,7 +58,6 @@ public class aggragator {
                             } catch (NumberFormatException ignored) {}
                         }
 
-                        // Prepare row map
                         Map<String, String> row = new LinkedHashMap<>();
                         row.put("Analyzer", analyzer);
                         row.put("Similarity", similarity);
@@ -85,14 +80,12 @@ public class aggragator {
                     }
                 });
 
-        // Sort rows by MAP descending
         allRows.sort((a, b) -> {
             double mapA = a.get("MAP").isEmpty() ? 0.0 : Double.parseDouble(a.get("MAP"));
             double mapB = b.get("MAP").isEmpty() ? 0.0 : Double.parseDouble(b.get("MAP"));
             return Double.compare(mapB, mapA); // descending
         });
 
-        // Write CSV
         try (PrintWriter writer = new PrintWriter(new FileWriter(outputCSV))) {
             writer.println("Analyzer,Similarity,T1,C1,T2,C2,MAP,P@10,R-Prec,bpref,recip_rank,InterpolatedPrecision,Recall");
             for (Map<String, String> row : allRows) {
@@ -103,7 +96,6 @@ public class aggragator {
         System.out.println("✅ TREC Eval summary CSV generated at: " + outputCSV);
     }
 
-    // Helper function to parse required metrics from a single TREC eval file
     private static Map<String, String> parseTrecEvalFile(Path file, List<String> metrics) throws IOException {
         Map<String, String> values = new HashMap<>();
         Pattern pattern = Pattern.compile("^(\\S+)\\s+all\\s+(\\S+)$");

@@ -288,136 +288,6 @@ public class CranFieldParserIndexer {
         System.out.println("Wrote TREC results to: " + outputFile);
     }
 
-    public static double averagePrecision(List<String> retrieved, Map<String, Integer> relevantMap) {
-        int relevantCount = 0;
-        int retrievedRelevant = 0;
-        double sumPrecisions = 0.0;
-
-        for (int i = 0; i < retrieved.size(); i++) {
-            String docid = retrieved.get(i);
-            if (relevantMap.getOrDefault(docid, 0) > 0) {
-                retrievedRelevant++;
-                double precAtI = retrievedRelevant / (double) (i + 1);
-                sumPrecisions += precAtI;
-            }
-        }
-
-        for (Integer rel: relevantMap.values()) if (rel > 0) relevantCount++;
-
-        if (relevantCount == 0) return 0.0;
-        return sumPrecisions / relevantCount;
-    }
-
-    public static double[] precisionRecallF1(List<String> retrieved, Map<String, Integer> relevantMap) {
-        int tp = 0;
-        int relevantTotal = 0;
-        for (Integer rv : relevantMap.values()) if (rv > 0) relevantTotal++;
-        for (String doc: retrieved) {
-            if (relevantMap.getOrDefault(doc, 0) > 0) tp++;
-        }
-        int retrievedCount = retrieved.size();
-        double precision = retrievedCount == 0 ? 0.0 : tp / (double) retrievedCount;
-        double recall = relevantTotal == 0 ? 0.0 : tp / (double) relevantTotal;
-        double f1 = (precision + recall) == 0.0 ? 0.0 : 2 * precision * recall / (precision + recall);
-        return new double[]{precision, recall, f1};
-    }
-
-    public static double[] interpolatedPrecisionRecall(List<String> retrieved, Map<String, Integer> relevantMap) {
-        List<Double> precisions = new ArrayList<>();
-        List<Double> recalls = new ArrayList<>();
-        int tp = 0;
-        int relevantTotal = 0;
-        for (Integer rv : relevantMap.values()) if (rv > 0) relevantTotal++;
-
-        for (int i = 0; i < retrieved.size(); i++) {
-            String docid = retrieved.get(i);
-            if (relevantMap.getOrDefault(docid, 0) > 0) tp++;
-            double prec = (i + 1) == 0 ? 0.0 : tp / (double) (i + 1);
-            double rec = relevantTotal == 0 ? 0.0 : tp / (double) relevantTotal;
-            precisions.add(prec);
-            recalls.add(rec);
-        }
-
-        double[] interp = new double[11]; // 0.0,0.1,...1.0
-        for (int j = 0; j <= 10; j++) {
-            double recallLevel = j / 10.0;
-            double maxPrec = 0.0;
-            for (int i = 0; i < precisions.size(); i++) {
-                if (recalls.get(i) >= recallLevel && precisions.get(i) > maxPrec) {
-                    maxPrec = precisions.get(i);
-                }
-            }
-            interp[j] = maxPrec;
-        }
-        return interp;
-    }
-
-    public static void runInternalEvaluation(IndexSearcher searcher, Analyzer analyzer,
-                                             String queriesFile, String qrelFile,
-                                             int topK, float titleBoost, float bodyBoost) throws Exception {
-
-        LinkedHashMap<String, String> queries = loadQueries(queriesFile,analyzer);
-        Map<String, Map<String, Integer>> qrels = loadQrels(qrelFile);
-        MultiFieldQueryParser parser = makeParser(analyzer, titleBoost, bodyBoost);
-
-        double sumAP = 0.0;
-        int qcount = 0;
-        double sumPrecAtK = 0.0;
-        double sumRecallAtK = 0.0;
-        List<double[]> allInterpolated = new ArrayList<>();
-
-        try (PrintWriter debug = new PrintWriter(new FileWriter("evaluation_details.txt"))) {
-            for (Map.Entry<String, String> e : queries.entrySet()) {
-                String qid = e.getKey();
-                String qtext = e.getValue();
-                Map<String, Integer> rels = qrels.getOrDefault(qid, Collections.emptyMap());
-
-                String safeQuery = qtext.replaceAll("[\\?\\*]", " ");
-                Query q = parser.parse(safeQuery);
-                TopDocs topDocs = searcher.search(q, topK);
-                List<String> retrieved = new ArrayList<>();
-                for (ScoreDoc sd : topDocs.scoreDocs) {
-                    Document doc = searcher.storedFields().document(sd.doc);
-                    retrieved.add(doc.get("id"));
-                }
-
-                double ap = averagePrecision(retrieved, rels);
-                double[] prf = precisionRecallF1(retrieved, rels); // precision, recall, f1 (at retrieved size)
-                double[] interp = interpolatedPrecisionRecall(retrieved, rels);
-
-                sumAP += ap;
-                sumPrecAtK += prf[0];
-                sumRecallAtK += prf[1];
-                allInterpolated.add(interp);
-                qcount++;
-
-                // debug per-query output
-                debug.printf("Query %s: AP=%.4f, Precision=%.4f, Recall=%.4f, F1=%.4f\n", qid, ap, prf[0], prf[1], prf[2]);
-            }
-        }
-
-        double MAP = qcount == 0 ? 0.0 : sumAP / qcount;
-        double avgPrecision = qcount == 0 ? 0.0 : sumPrecAtK / qcount;
-        double avgRecall = qcount == 0 ? 0.0 : sumRecallAtK / qcount;
-
-        double[] meanInterp = new double[11];
-        for (double[] arr : allInterpolated) {
-            for (int i = 0; i < 11; i++) meanInterp[i] += arr[i];
-        }
-        for (int i = 0; i < 11; i++) if (qcount > 0) meanInterp[i] /= qcount;
-
-        System.out.println("----- Internal Evaluation Summary -----");
-        System.out.printf("Queries evaluated: %d\n", qcount);
-        System.out.printf("MAP: %.6f\n", MAP);
-        System.out.printf("Mean Precision (per-query): %.6f\n", avgPrecision);
-        System.out.printf("Mean Recall (per-query): %.6f\n", avgRecall);
-        System.out.println("11-point interpolated precision-recall (recall 0.0 .. 1.0):");
-        for (int i = 0; i <= 10; i++) {
-            System.out.printf("Recall=%.1f : Precision=%.6f\n", i / 10.0, meanInterp[i]);
-        }
-        System.out.println("Detailed per-query metrics saved to evaluation_details.txt");
-    }
-
     public static IndexSearcher makeSearcherWithSimilarity(IndexReader reader, int simChoice) {
         IndexSearcher searcher = new IndexSearcher(reader);
         switch (simChoice) {
@@ -530,7 +400,7 @@ public class CranFieldParserIndexer {
                                 docs.size(), analyzerName, simName, titleBoost, contentBoost);
 
                         generateTrecResults(searcher, analyzer, queriesFile, resultFile, DEFAULT_TOP_K, titleBoost, contentBoost);
-                        runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, titleBoost, contentBoost);
+                        //runInternalEvaluation(searcher, analyzer, queriesFile, qrelsFile, DEFAULT_TOP_K, titleBoost, contentBoost);
 
                         File evalDetails = new File("evaluation_details.txt");
                         if (evalDetails.exists()) {
